@@ -4,6 +4,17 @@ A Direct3D 9 Fixed-Function Pipeline implementation targeting WebGL 2.0 via Emsc
 
 Drop-in D3D9 headers and a single `.cpp` file that translates D3D9 API calls to WebGL — enabling legacy D3D9 applications to run in the browser without rewriting their rendering code.
 
+<table>
+<tr>
+<td align="center"><strong>01 — Rotating Cube</strong><br>Textures, VB/IB, DrawIndexedPrimitive</td>
+<td align="center"><strong>02 — FFP Lighting</strong><br>3 Point Lights, Materials, DrawPrimitiveUP</td>
+</tr>
+<tr>
+<td><img src="screenshots/01-rotating-cube.png" width="400"></td>
+<td><img src="screenshots/02-lighting.png" width="400"></td>
+</tr>
+</table>
+
 ## ✨ Features
 
 - **Full FFP Emulation** — Per-vertex lighting (3 point lights), materials, texture stage states, transform matrices
@@ -48,15 +59,22 @@ Drop-in D3D9 headers and a single `.cpp` file that translates D3D9 API calls to 
 
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)
 
-### Build the Demo
+### Build the Examples
 
 ```bash
-cd examples
+cd examples/01-rotating-cube
 ./build.sh
 cd build && python3 -m http.server 8000
 ```
 
-Open `http://localhost:8000/d3d9-poc.html` — you should see a textured rotating cube.
+Open `http://localhost:8000/d3d9-rotating-cube.html` — you should see a textured rotating cube.
+
+Two examples are included:
+
+| Example | Features |
+|---------|----------|
+| `01-rotating-cube` | `DrawIndexedPrimitive`, vertex/index buffers, textures, transforms |
+| `02-lighting` | `SetLight`/`SetMaterial`, `DrawIndexedPrimitiveUP`, `DrawPrimitiveUP`, FFP per-vertex lighting |
 
 ### Integrate into Your Project
 

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D3D9 to WebGL - FFP Lighting Demo</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            color: #4CAF50;
+        }
+
+        .info {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #2a2a2a;
+            border-radius: 5px;
+            max-width: 800px;
+        }
+
+        .info code {
+            color: #81C784;
+        }
+
+        #canvas {
+            border: 2px solid #4CAF50;
+            background-color: #000;
+        }
+
+        #output {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #2a2a2a;
+            border-radius: 5px;
+            max-width: 800px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: #000;
+            border-radius: 3px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <h1>D3D9 to WebGL - FFP Lighting</h1>
+
+    <div class="info">
+        <p><strong>Features demonstrated:</strong></p>
+        <ul>
+            <li><code>SetLight</code> / <code>LightEnable</code> &mdash; 3 orbiting point lights (R, G, B)</li>
+            <li><code>SetMaterial</code> &mdash; Diffuse + ambient material properties</li>
+            <li><code>DrawIndexedPrimitiveUP</code> &mdash; Sphere (user-pointer indexed geometry)</li>
+            <li><code>DrawPrimitiveUP</code> &mdash; Floor plane + light indicator cubes</li>
+            <li><code>D3DFVF_XYZ | D3DFVF_NORMAL</code> &mdash; Vertex format for FFP lighting</li>
+            <li><code>D3DRS_LIGHTING</code> toggle &mdash; Lit sphere/floor vs. unlit indicators</li>
+        </ul>
+    </div>
+
+    <canvas id="canvas" width="800" height="600"></canvas>
+
+    <div class="status">Initializing...</div>
+
+    <div id="output"></div>
+
+    <script type="text/javascript">
+        var Module = {
+            preRun: [],
+            postRun: [],
+            print: (function() {
+                var element = document.getElementById('output');
+                if (element) element.value = '';
+                return function(text) {
+                    if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                    console.log(text);
+                    if (element) {
+                        element.innerHTML += text + "\n";
+                        element.scrollTop = element.scrollHeight;
+                    }
+                };
+            })(),
+            printErr: function(text) {
+                if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                console.error(text);
+            },
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                canvas.addEventListener("webglcontextlost", function(e) {
+                    alert('WebGL context lost. You will need to reload the page.');
+                    e.preventDefault();
+                }, false);
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                var statusElement = document.querySelector('.status');
+                if (statusElement) {
+                    if (text) {
+                        statusElement.textContent = text;
+                        statusElement.style.backgroundColor = '#4CAF50';
+                    } else {
+                        statusElement.textContent = 'Running';
+                        statusElement.style.backgroundColor = '#2196F3';
+                    }
+                }
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            }
+        };
+        Module.setStatus('Downloading...');
+        window.onerror = function() {
+            Module.setStatus('Exception thrown, see JavaScript console');
+            Module.setStatus = function(text) {
+                if (text) Module.printErr('[post-exception status] ' + text);
+            };
+        };
+    </script>
+    {{{ SCRIPT }}}
+</body>
+</html>

@@ -46,6 +46,23 @@ typedef DWORD* LPDWORD;
 #define WINAPI
 #endif
 
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
+
+#ifndef _RECT_DEFINED
+typedef struct tagRECT {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+#define _RECT_DEFINED
+#endif
+
 #ifndef _WIN32
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
@@ -62,13 +79,6 @@ typedef uint64_t UINT64;
 #define D3DPS_VERSION(major, minor) (0xFFFF0000 | ((major) << 8) | (minor))
 #define D3DSHADER_VERSION_MAJOR(_ver) (((_ver) >> 8) & 0xFF)
 #define D3DSHADER_VERSION_MINOR(_ver) ((_ver) & 0xFF)
-
-#ifndef TRUE
-#define TRUE 1
-#endif
-#ifndef FALSE
-#define FALSE 0
-#endif
 
 // NOTE: Returns a pointer to a static buffer. Subsequent calls overwrite the buffer.
 // Safe for single-use in log statements (e.g. printf("%s", DXGetErrorString(hr))),
@@ -95,16 +105,6 @@ typedef struct _D3DRECT {
 #define D3DCOLORWRITEENABLE_BLUE (1 << 2)
 #define D3DCOLORWRITEENABLE_ALPHA (1 << 3)
 
-
-#ifndef _RECT_DEFINED
-typedef struct tagRECT {
-    LONG left;
-    LONG top;
-    LONG right;
-    LONG bottom;
-} RECT;
-#define _RECT_DEFINED
-#endif
 
 #define D3DCOLOR_COLORVALUE(r,g,b,a) \
     ((DWORD)((((DWORD)((a)*255.f))<<24)|(((DWORD)((r)*255.f))<<16)|(((DWORD)((g)*255.f))<<8)|((DWORD)((b)*255.f))))
