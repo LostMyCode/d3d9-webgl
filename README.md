@@ -217,6 +217,10 @@ Alpha blending (src/dest blend), depth test (func, write enable), stencil (func,
 
 This wrapper was developed as part of porting [GunZ: The Duel](https://en.wikipedia.org/wiki/GunZ:_The_Duel) (2003, MAIET Entertainment) to run entirely in the browser via WebAssembly. The original game's Direct3D 9 rendering code runs through this translation layer without modification.
 
+[**Whiplash GunZ**](https://gunz.sigr.io/) — a fully browser-based port of GunZ: The Duel, powered by this wrapper.
+
+<a href="https://gunz.sigr.io/"><img src="screenshots/gunz-browser.png" width="600"></a>
+
 ## ⚠️ Limitations
 
 - **FFP only** — No programmable vertex/pixel shaders. The wrapper reports `VertexShaderVersion = 0` to force applications into FFP code paths.
