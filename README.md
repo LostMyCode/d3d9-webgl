@@ -32,25 +32,25 @@ Drop-in D3D9 headers and a single `.cpp` file that translates D3D9 API calls to 
 ## 🏗 Architecture
 
 ```
-   D3D9 Application Code (C++)
-            │
-   ┌──────────────┴──────────────┐
+D3D9 Application Code (C++)
+              │
+   ┌──────────┴───────────┐
    │    d3d9.h            │  D3D9 type definitions, enums, interfaces
    │    d3dx9math.h       │  D3DX math (vectors, matrices, quaternions)
    │    d3dx9.h           │  D3DX stubs (ID3DXLine, ID3DXFont)
    │    windows_compat.h  │  Windows API stubs for non-Windows builds
-   └──────────────┬──────────────┘
-            │
-   ┌────────┴────────┐
+   └──────────┬───────────┘
+              │
+   ┌──────────┴──────┐
    │    d3d9.cpp     │  WebGL 2.0 implementation (~3,400 lines)
    │                 │  - GLSL vertex/fragment shaders (FFP emulation)
    │                 │  - Texture management (upload, format conversion)
    │                 │  - Render state → GL state mapping
    │                 │  - FBO render targets, clip planes, stencil
-   └────────┬────────┘
-            │
-      WebGL 2.0 / OpenGL ES 3.0
-         (Emscripten)
+   └──────────┬──────┘
+              │
+  WebGL 2.0 / OpenGL ES 3.0
+        (Emscripten)
 ```
 
 ## 🚀 Quick Start
