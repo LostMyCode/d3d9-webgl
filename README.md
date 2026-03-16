@@ -21,7 +21,8 @@ Drop-in D3D9 headers and a single `.cpp` file that translates D3D9 API calls to 
 - **All Draw Paths** — `DrawIndexedPrimitive`, `DrawIndexedPrimitiveUP`, `DrawPrimitiveUP`, `DrawPrimitive`
 - **FVF Parsing** — Automatic vertex layout from `D3DFVF_XYZ`, `D3DFVF_XYZRHW`, `D3DFVF_NORMAL`, `D3DFVF_DIFFUSE`, `D3DFVF_TEX1`–`TEX8`
 - **Texture Formats** — DXT1/3/5 (via S3TC extension), A8R8G8B8, X8R8G8B8, R5G6B5, A4R4G4B4, A1R5G5B5, R8G8B8
-- **Render States** — Alpha blending, alpha test, depth test, stencil operations, culling, scissor test, color write mask
+- **Linear Fog** — Per-pixel D3D9 table fog (`D3DRS_FOGENABLE`, `D3DRS_FOGCOLOR`, `D3DRS_FOGSTART`, `D3DRS_FOGEND`); automatically skipped for `D3DFVF_XYZRHW` vertices
+- **Render States** — Alpha blending, alpha test, depth test, stencil operations, culling, scissor test, color write mask, linear fog
 - **Texture Stage States** — Stage 0 color/alpha ops (MODULATE, MODULATE2X, SELECTARG), Stage 1 lightmap blending (MODULATE, MODULATE2X, MODULATE4X, ADDSIGNED, ADDSMOOTH)
 - **Render-to-Texture** — FBO-based with automatic Y-flip handling (D3D top-down vs GL bottom-up)
 - **Clip Plane Emulation** — Fragment shader `discard` (WebGL has no hardware clip planes)
@@ -200,7 +201,7 @@ extern "C" {
 
 ### Render States (D3DRS_*)
 
-Alpha blending (src/dest blend), depth test (func, write enable), stencil (func, ref, fail/zfail/pass ops), alpha test (ref), culling, scissor test, color write enable, lighting, ambient, texture factor, clip plane enable.
+Alpha blending (src/dest blend), depth test (func, write enable), stencil (func, ref, fail/zfail/pass ops), alpha test (ref), culling, scissor test, color write enable, lighting, ambient, texture factor, clip plane enable, linear fog (enable, color, start/end range).
 
 ### Texture Formats
 
@@ -229,6 +230,7 @@ This wrapper was developed as part of porting [GunZ: The Duel](https://en.wikipe
 - **`D3DXMatrixInverse` is a stub** — Returns identity. Applications relying on matrix inversion should provide their own implementation.
 - **Stream 0 only** — Multi-stream vertex buffer binding is not supported.
 - **No GPU readback** — `LockRect` on render target textures is not supported.
+- **Linear fog only** — `D3DFOG_EXP`, `D3DFOG_EXP2`, and range-based fog (`D3DRS_RANGEFOGENABLE`) are accepted but have no effect. Only `D3DFOG_LINEAR` (table fog) is implemented.
 
 ## 📄 License
 
