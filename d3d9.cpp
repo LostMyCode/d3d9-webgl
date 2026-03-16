@@ -81,6 +81,11 @@ uniform mat4 u_mvp;
 uniform mat4 u_world;
 uniform bool u_fbo_flip_y;
 
+// Fog
+uniform bool u_fog_enabled;
+uniform mat4 u_view_model;
+varying float v_eye_depth;
+
 // D3D9 FFP Lighting
 uniform bool u_lighting_enabled;
 uniform vec4 u_material_diffuse;
@@ -162,6 +167,14 @@ void main() {
     } else {
         v_color = a_color;
     }
+
+    // Fog: pass eye-space Z to fragment shader for per-pixel fog (D3D9 table fog)
+    if (u_fog_enabled) {
+        vec4 view_pos = u_view_model * a_position;
+        v_eye_depth = abs(view_pos.z);
+    } else {
+        v_eye_depth = 0.0;
+    }
 }
 )";
 
@@ -188,6 +201,13 @@ static const char* fragment_shader_source = R"(
     uniform float u_alpha_ref;
     uniform vec4 u_texture_factor;
     uniform float u_lod_bias;
+
+    // Fog (per-pixel, matches D3D9 table fog)
+    uniform bool u_fog_enabled;
+    uniform float u_fog_start;
+    uniform float u_fog_end;
+    uniform vec3 u_fog_color;
+    varying float v_eye_depth;
 
     // Helper function to select texture argument source
     vec4 selectTextureArg(int arg) {
@@ -294,6 +314,12 @@ static const char* fragment_shader_source = R"(
             }
         }
 
+        // Apply fog (per-pixel linear fog, matches D3D9 table fog)
+        if (u_fog_enabled) {
+            float fog_factor = clamp((u_fog_end - v_eye_depth) / (u_fog_end - u_fog_start), 0.0, 1.0);
+            final_color.rgb = mix(u_fog_color, final_color.rgb, fog_factor);
+        }
+
         gl_FragColor = final_color;
     }
 )";
@@ -325,6 +351,13 @@ static GLint g_alpha_test_enabled_uniform = -1;
 static GLint g_alpha_ref_uniform = -1;
 static GLint g_texture_factor_uniform = -1;
 static GLint g_lod_bias_uniform = -1;
+
+// Fog uniforms
+static GLint g_fog_enabled_uniform = -1;
+static GLint g_fog_start_uniform = -1;
+static GLint g_fog_end_uniform = -1;
+static GLint g_fog_color_uniform = -1;
+static GLint g_view_model_uniform = -1;
 
 // FFP Lighting uniforms
 static GLint g_normal_location = -1;
@@ -579,6 +612,12 @@ static void init_shaders() {
     g_alpha_ref_uniform = glGetUniformLocation(g_shader_program, "u_alpha_ref");
     g_texture_factor_uniform = glGetUniformLocation(g_shader_program, "u_texture_factor");
     g_lod_bias_uniform = glGetUniformLocation(g_shader_program, "u_lod_bias");
+    // Fog uniforms
+    g_fog_enabled_uniform = glGetUniformLocation(g_shader_program, "u_fog_enabled");
+    g_fog_start_uniform = glGetUniformLocation(g_shader_program, "u_fog_start");
+    g_fog_end_uniform = glGetUniformLocation(g_shader_program, "u_fog_end");
+    g_fog_color_uniform = glGetUniformLocation(g_shader_program, "u_fog_color");
+    g_view_model_uniform = glGetUniformLocation(g_shader_program, "u_view_model");
     // FFP Lighting uniforms
     g_lighting_enabled_uniform = glGetUniformLocation(g_shader_program, "u_lighting_enabled");
     g_material_diffuse_uniform = glGetUniformLocation(g_shader_program, "u_material_diffuse");
@@ -1160,7 +1199,13 @@ private:
     DWORD m_alpha_ref = 0;
     bool m_alpha_test_enabled = false;
     D3DCOLOR m_texture_factor;
-    
+
+    // Fog state
+    bool m_fog_enabled = false;
+    float m_fog_start = 0.0f;
+    float m_fog_end = 1.0f;
+    D3DCOLOR m_fog_color = 0xFFFFFFFF;
+
     // Debug: Flags to suppress repetitive shader warnings (performance optimization)
     static bool s_pixel_shader_warning_shown;
     static bool s_vertex_shader_warning_shown;
@@ -1433,6 +1478,21 @@ public:
             glUniform1f(g_lod_bias_uniform, lod_bias);
         }
 
+        // Fog uniforms
+        {
+            bool apply_fog = m_fog_enabled && !(g_current_fvf & D3DFVF_XYZRHW);
+            glUniform1i(g_fog_enabled_uniform, apply_fog ? 1 : 0);
+            if (apply_fog) {
+                float r = ((m_fog_color >> 16) & 0xFF) / 255.0f;
+                float g_c = ((m_fog_color >> 8) & 0xFF) / 255.0f;
+                float b = (m_fog_color & 0xFF) / 255.0f;
+                glUniform3f(g_fog_color_uniform, r, g_c, b);
+                glUniform1f(g_fog_start_uniform, m_fog_start);
+                glUniform1f(g_fog_end_uniform, m_fog_end);
+                gl_set_matrix_uniform(g_view_model_uniform, &view_model);
+            }
+        }
+
         // Set Stage 0 texture stage states
         if (g_stage0_colorop_uniform != -1)
             glUniform1i(g_stage0_colorop_uniform, g_texture_stage_states[0][D3DTSS_COLOROP]);
@@ -1619,7 +1679,7 @@ public:
         float g = ((Color >> 8) & 0xFF) / 255.0f;
         float b = (Color & 0xFF) / 255.0f;
         float a = ((Color >> 24) & 0xFF) / 255.0f;
-        
+
         glClearColor(r, g, b, a);
         glClearDepthf(Z);
         glClearStencil(Stencil);
@@ -1880,8 +1940,23 @@ static void ApplySamplerStates(DWORD Sampler) {
             glUniform1i(g_stage0_alphaarg2_uniform, g_texture_stage_states[0][D3DTSS_ALPHAARG2]);
         }
 
+        // Fog uniforms
+        {
+            bool apply_fog = m_fog_enabled && !(g_current_fvf & D3DFVF_XYZRHW);
+            glUniform1i(g_fog_enabled_uniform, apply_fog ? 1 : 0);
+            if (apply_fog) {
+                float r = ((m_fog_color >> 16) & 0xFF) / 255.0f;
+                float g_c = ((m_fog_color >> 8) & 0xFF) / 255.0f;
+                float b = (m_fog_color & 0xFF) / 255.0f;
+                glUniform3f(g_fog_color_uniform, r, g_c, b);
+                glUniform1f(g_fog_start_uniform, m_fog_start);
+                glUniform1f(g_fog_end_uniform, m_fog_end);
+                gl_set_matrix_uniform(g_view_model_uniform, &view_model);
+            }
+        }
+
         const uint8_t* vertex_data = static_cast<const uint8_t*>(pVertexStreamZeroData);
-        
+
         // Calculate vertex count and total size
         UINT vertex_count = 0;
          switch (PrimitiveType) {
@@ -2139,6 +2214,21 @@ static void ApplySamplerStates(DWORD Sampler) {
         }
         if (g_stage0_alphaarg2_uniform != -1) {
             glUniform1i(g_stage0_alphaarg2_uniform, g_texture_stage_states[0][D3DTSS_ALPHAARG2]);
+        }
+
+        // Fog uniforms
+        {
+            bool apply_fog = m_fog_enabled && !(g_current_fvf & D3DFVF_XYZRHW);
+            glUniform1i(g_fog_enabled_uniform, apply_fog ? 1 : 0);
+            if (apply_fog) {
+                float r = ((m_fog_color >> 16) & 0xFF) / 255.0f;
+                float g_c = ((m_fog_color >> 8) & 0xFF) / 255.0f;
+                float b = (m_fog_color & 0xFF) / 255.0f;
+                glUniform3f(g_fog_color_uniform, r, g_c, b);
+                glUniform1f(g_fog_start_uniform, m_fog_start);
+                glUniform1f(g_fog_end_uniform, m_fog_end);
+                gl_set_matrix_uniform(g_view_model_uniform, &view_model);
+            }
         }
 
         // Dynamic FVF Parsing
@@ -2547,6 +2637,31 @@ static void ApplySamplerStates(DWORD Sampler) {
             case D3DRS_TEXTUREFACTOR:
                 m_texture_factor = Value;
                 break;
+
+            case D3DRS_FOGENABLE:
+                m_fog_enabled = (Value != 0);
+                break;
+            case D3DRS_FOGCOLOR:
+                m_fog_color = Value;
+                break;
+            case D3DRS_FOGSTART:
+                m_fog_start = *(float*)&Value;
+                break;
+            case D3DRS_FOGEND:
+                m_fog_end = *(float*)&Value;
+                break;
+            case D3DRS_FOGTABLEMODE:
+                // Only D3DFOG_LINEAR is implemented. D3DFOG_EXP and D3DFOG_EXP2 are not supported.
+                // TODO: implement EXP/EXP2 fog modes if needed.
+                break;
+            case D3DRS_FOGVERTEXMODE:
+                // Vertex fog mode is ignored; table fog (per-pixel) is always used.
+                // TODO: implement vertex fog mode if needed.
+                break;
+            case D3DRS_RANGEFOGENABLE:
+                // Range-based fog is not implemented; depth (eye-space Z) is used instead.
+                // TODO: implement range-based fog if needed.
+                break;
         }
         return D3D_OK;
     }
@@ -2858,6 +2973,21 @@ static void ApplySamplerStates(DWORD Sampler) {
         }
         if (g_stage0_alphaarg2_uniform != -1) {
             glUniform1i(g_stage0_alphaarg2_uniform, g_texture_stage_states[0][D3DTSS_ALPHAARG2]);
+        }
+
+        // Fog uniforms
+        {
+            bool apply_fog = m_fog_enabled && !(g_current_fvf & D3DFVF_XYZRHW);
+            glUniform1i(g_fog_enabled_uniform, apply_fog ? 1 : 0);
+            if (apply_fog) {
+                float r = ((m_fog_color >> 16) & 0xFF) / 255.0f;
+                float g_c = ((m_fog_color >> 8) & 0xFF) / 255.0f;
+                float b = (m_fog_color & 0xFF) / 255.0f;
+                glUniform3f(g_fog_color_uniform, r, g_c, b);
+                glUniform1f(g_fog_start_uniform, m_fog_start);
+                glUniform1f(g_fog_end_uniform, m_fog_end);
+                gl_set_matrix_uniform(g_view_model_uniform, &view_model);
+            }
         }
 
         // Bind buffers
