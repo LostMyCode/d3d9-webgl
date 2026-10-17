@@ -17,16 +17,16 @@ Drop-in D3D9 headers and a single `.cpp` file that translates D3D9 API calls to 
 
 ## ✨ Features
 
-- **Full FFP Emulation** — Per-vertex lighting (3 point lights), materials, texture stage states, transform matrices
+- **Full FFP Emulation** — A shader is generated (and cached) for each combination of fixed-function states, as drivers do: per-vertex lighting with up to 8 directional, point and spot lights (attenuation, range, cone falloff, specular), material colour sources, up to 4 texture stages with all color/alpha operations and arguments, texture coordinate generation and texture transforms
 - **All Draw Paths** — `DrawIndexedPrimitive`, `DrawIndexedPrimitiveUP`, `DrawPrimitiveUP`, `DrawPrimitive`
-- **FVF Parsing** — Automatic vertex layout from `D3DFVF_XYZ`, `D3DFVF_XYZRHW`, `D3DFVF_NORMAL`, `D3DFVF_DIFFUSE`, `D3DFVF_TEX1`–`TEX8`
+- **FVF Parsing** — Automatic vertex layout from `D3DFVF_XYZ`, `D3DFVF_XYZRHW`, `D3DFVF_XYZB1`–`B5`, `D3DFVF_NORMAL`, `D3DFVF_PSIZE`, `D3DFVF_DIFFUSE`, `D3DFVF_SPECULAR`, `D3DFVF_TEX1`–`TEX8` with `D3DFVF_TEXCOORDSIZE1`–`4`
 - **Texture Formats** — DXT1/3/5 (via S3TC extension), A8R8G8B8, X8R8G8B8, R5G6B5, A4R4G4B4, A1R5G5B5, R8G8B8
-- **Linear Fog** — Per-pixel D3D9 table fog (`D3DRS_FOGENABLE`, `D3DRS_FOGCOLOR`, `D3DRS_FOGSTART`, `D3DRS_FOGEND`); automatically skipped for `D3DFVF_XYZRHW` vertices
-- **Render States** — Alpha blending, alpha test, depth test, stencil operations, culling, scissor test, color write mask, linear fog
-- **Texture Stage States** — Stage 0 color/alpha ops (MODULATE, MODULATE2X, SELECTARG), Stage 1 lightmap blending (MODULATE, MODULATE2X, MODULATE4X, ADDSIGNED, ADDSMOOTH)
-- **Render-to-Texture** — FBO-based with automatic Y-flip handling (D3D top-down vs GL bottom-up)
+- **Fog** — Table fog per pixel and vertex fog per vertex, linear, exp and exp2, range-based fog, the specular alpha as fog factor when no fog mode is set
+- **Render States** — Alpha blending with blend op, alpha test (all compare functions), depth test, stencil operations, culling, scissor test, color write mask, fog, specular, D3D9 default values
+- **Texture Stage States** — Stages 0–3: all `D3DTOP_*` operations except bump mapping, `D3DTA_*` arguments with `COMPLEMENT`/`ALPHAREPLICATE`, `COLORARG0`/`ALPHAARG0`, `RESULTARG` temp; `TEXCOORDINDEX` with camera-space normal, position, reflection vector and sphere map generation; `TEXTURETRANSFORMFLAGS` (`COUNT1`–`4`, `PROJECTED`)
+- **Render-to-Texture** — FBO-based with automatic Y-flip handling (D3D top-down vs GL bottom-up); depth surfaces of any size; a stage never samples the current render target (no WebGL feedback loop)
 - **Clip Plane Emulation** — Fragment shader `discard` (WebGL has no hardware clip planes)
-- **State Caching** — Texture bindings, shader programs, sampler states, viewport/scissor to minimize WebGL API overhead
+- **State Caching** — Generated programs per state combination, vertex attribute arrays, viewport/scissor to minimize WebGL API overhead
 - **GL Interop** — `extern "C"` API to access underlying GL texture IDs for hybrid rendering
 - **Canvas Selector** — Configurable target canvas via overloaded `CreateDevice`
 
@@ -43,8 +43,8 @@ D3D9 Application Code (C++)
    └──────────┬───────────┘
               │
    ┌──────────┴──────┐
-   │    d3d9.cpp     │  WebGL 2.0 implementation (~3,400 lines)
-   │                 │  - GLSL vertex/fragment shaders (FFP emulation)
+   │    d3d9.cpp     │  WebGL 2.0 implementation (~2,000 lines)
+   │  d3d9_ffp.inl   │  - fixed-function pipeline: GLSL generated per state
    │                 │  - Texture management (upload, format conversion)
    │                 │  - Render state → GL state mapping
    │                 │  - FBO render targets, clip planes, stencil
@@ -178,17 +178,17 @@ extern "C" {
 | `DrawPrimitiveUP` | Implemented |
 | `DrawPrimitive` | Implemented |
 | `SetRenderState` | Implemented (see render states below) |
-| `SetTextureStageState` | Implemented (stage 0 + stage 1) |
+| `SetTextureStageState` | Implemented (stages 0–3) |
 | `SetSamplerState` | Implemented (filter, address, LOD bias, anisotropy) |
 | `SetTransform` | Implemented (world, view, projection, texture) |
-| `SetTexture` | Implemented (stage 0 + stage 1 lightmap) |
+| `SetTexture` | Implemented (stages 0–3) |
 | `SetStreamSource` | Implemented |
 | `SetIndices` | Implemented |
 | `SetFVF` | Implemented |
 | `SetRenderTarget` | Implemented (FBO-based) |
 | `SetDepthStencilSurface` | Implemented |
 | `SetClipPlane` | Implemented (1 plane, shader-based) |
-| `SetLight` / `LightEnable` | Implemented (3 point lights) |
+| `SetLight` / `LightEnable` | Implemented (8 lights: directional, point, spot) |
 | `SetMaterial` | Implemented |
 | `SetScissorRect` | Implemented |
 | `SetViewport` | Implemented |
@@ -197,11 +197,12 @@ extern "C" {
 | `CreateIndexBuffer` | Implemented |
 | `CreateDepthStencilSurface` | Implemented |
 | `StretchRect` | Implemented (FBO blit with Y-flip) |
+| `GetBackBuffer` / `ColorFill` | Implemented |
 | `GetDeviceCaps` | Implemented (reports FFP-only) |
 
 ### Render States (D3DRS_*)
 
-Alpha blending (src/dest blend), depth test (func, write enable), stencil (func, ref, fail/zfail/pass ops), alpha test (ref), culling, scissor test, color write enable, lighting, ambient, texture factor, clip plane enable, linear fog (enable, color, start/end range).
+Alpha blending (src/dest blend, blend op), depth test (func, write enable), stencil (func, ref, mask, write mask, fail/zfail/pass ops), alpha test (ref, func), culling, scissor test, color write enable, lighting, ambient, specular enable, local viewer, normalize normals, color vertex and the four material sources, texture factor, clip plane enable, fog (enable, color, table/vertex mode, start/end, density, range).
 
 ### Texture Formats
 
@@ -225,12 +226,11 @@ This wrapper was developed as part of porting [GunZ: The Duel](https://en.wikipe
 ## ⚠️ Limitations
 
 - **FFP only** — No programmable vertex/pixel shaders. The wrapper reports `VertexShaderVersion = 0` to force applications into FFP code paths.
-- **Single shader** — All FFP states are handled by one vertex + one fragment shader. Complex multi-pass techniques may need adaptation.
-- **3 point lights max** — Hardcoded limit in the GLSL shader. Directional and spot lights are not implemented.
+- **4 texture stages** — Stages 4–7 are ignored; `D3DTOP_BUMPENVMAP`/`BUMPENVMAPLUMINANCE` and `D3DTA_CONSTANT` are not implemented.
 - **`D3DXMatrixInverse` is a stub** — Returns identity. Applications relying on matrix inversion should provide their own implementation.
 - **Stream 0 only** — Multi-stream vertex buffer binding is not supported.
 - **No GPU readback** — `LockRect` on render target textures is not supported.
-- **Linear fog only** — `D3DFOG_EXP`, `D3DFOG_EXP2`, and range-based fog (`D3DRS_RANGEFOGENABLE`) are accepted but have no effect. Only `D3DFOG_LINEAR` (table fog) is implemented.
+- **Vertex blending** — `D3DFVF_XYZB*` vertices are read, but their weights are not applied (`D3DRS_VERTEXBLEND`).
 
 ## 📄 License
 
