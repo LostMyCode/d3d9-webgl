@@ -740,6 +740,26 @@ static void SetFFPLightingUniforms(const D3DMATRIX* world, const DWORD* render_s
 
 // Global FBO for SetRenderTarget
 static GLuint g_fbo = 0;
+// Colour-only framebuffers for StretchRect and ColorFill, so they leave g_fbo
+// (the render target with its depth buffer) alone
+static GLuint g_fbo_read = 0, g_fbo_aux = 0;
+
+// D3D9 lets a depth surface be larger than the render target (one big Z buffer
+// shared by all render targets is common); WebGL refuses framebuffers whose
+// attachments differ in size. Render targets of another size than the depth
+// surface get a depth buffer of their own size from here, one per size.
+static std::map<std::pair<UINT, UINT>, GLuint> g_depth_for_size;
+
+static GLuint DepthBufferForSize(UINT w, UINT h) {
+    GLuint& rb = g_depth_for_size[std::make_pair(w, h)];
+    if (!rb) {
+        glGenRenderbuffers(1, &rb);
+        glBindRenderbuffer(GL_RENDERBUFFER, rb);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    }
+    return rb;
+}
 
 // D3D9Surface class
 class D3D9Surface : public IDirect3DSurface9 {
@@ -1224,12 +1244,15 @@ public:
         g_viewport.MaxZ = 1.0f;
 
         if (g_fbo == 0) glGenFramebuffers(1, &g_fbo);
+        if (g_fbo_read == 0) glGenFramebuffers(1, &g_fbo_read);
+        if (g_fbo_aux == 0) glGenFramebuffers(1, &g_fbo_aux);
 
         m_scissor_rect = {0, 0, (LONG)g_logical_width, (LONG)g_logical_height};
 
         // Backbuffer surface matches the app's backbuffer resolution
         m_backbuffer_surface = new D3D9Surface(g_logical_width, g_logical_height, 0, false, true);
         m_current_rt = m_backbuffer_surface;
+        m_current_rt->AddRef(); // held as the current render target
         m_current_ds = nullptr; // Default DS is implicit in WebGL context
         
         // Initialize matrices to identity
@@ -1294,6 +1317,9 @@ public:
             m_backbuffer_surface->Release();
             m_backbuffer_surface = nullptr;
         }
+        // The device holds a reference to its render target and depth surface
+        if (m_current_rt) m_current_rt->Release();
+        if (m_current_ds) m_current_ds->Release();
         m_current_rt = nullptr;
         m_current_ds = nullptr;
 
@@ -1339,10 +1365,88 @@ public:
         return D3D_OK;
     }
     
+    // Attach the depth surface to g_fbo (bound) for the current render target
+    void AttachDepthToFbo() {
+        GLuint rb = 0;
+        if (m_current_ds && m_current_rt) {
+            rb = m_current_ds->m_gl_object;
+            if (m_current_ds->m_width != m_current_rt->m_width || m_current_ds->m_height != m_current_rt->m_height)
+                rb = DepthBufferForSize(m_current_rt->m_width, m_current_rt->m_height);
+        }
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
+    }
+
+    // The texture a stage may sample: none while it is also the render target.
+    // (D3D9 leaves that undefined and drivers tolerate it; WebGL refuses the draw
+    // with "Feedback loop formed between Framebuffer and active Texture".)
+    GLuint SamplableTexture(DWORD stage) const {
+        GLuint t = g_texture_stages[stage];
+        if (t && m_fbo_rendering && m_current_rt && t == m_current_rt->m_gl_object) return 0;
+        return t;
+    }
+
+    // Just before a draw into a render target: no texture unit may still hold
+    // that render target's texture (stale bindings on unit 1, or binds by
+    // texture uploads, would otherwise form a feedback loop).
+    void GuardFeedbackLoop() {
+        if (!m_fbo_rendering || !m_current_rt) return;
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, SamplableTexture(1));
+        g_last_bound_lightmap_id = 0xFFFFFFFF;
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, SamplableTexture(0));
+        g_cached_texture = SamplableTexture(0);
+    }
+
+    virtual HRESULT GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override {
+        if (!ppBackBuffer || iSwapChain != 0 || iBackBuffer != 0) return D3DERR_INVALIDCALL;
+        *ppBackBuffer = m_backbuffer_surface;
+        m_backbuffer_surface->AddRef(); // Proper COM semantics: caller must Release
+        return D3D_OK;
+    }
+
+    // Fill a rectangle of a render target or the backbuffer with one colour
+    // (a scissored clear; render states such as the colour write mask do not apply).
+    virtual HRESULT ColorFill(IDirect3DSurface9* pSurface, const RECT* pRect, D3DCOLOR color) override {
+        D3D9Surface* surf = static_cast<D3D9Surface*>(pSurface);
+        if (!surf || surf->m_is_renderbuffer) return D3DERR_INVALIDCALL;
+        if (!surf->m_is_backbuffer && surf->m_gl_object == 0) return D3D_OK; // offscreen plain surface: no GL storage
+
+        if (surf->m_is_backbuffer) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        } else {
+            glBindFramebuffer(GL_FRAMEBUFFER, g_fbo_aux);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, surf->m_gl_object, 0);
+        }
+
+        RECT r = {0, 0, (LONG)surf->m_width, (LONG)surf->m_height};
+        if (pRect) r = *pRect;
+        // the backbuffer is bottom-to-top in GL; render targets are stored upside down already
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(r.left, surf->m_is_backbuffer ? (GLint)surf->m_height - r.bottom : r.top, r.right - r.left, r.bottom - r.top);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(((color >> 16) & 0xFF) / 255.0f, ((color >> 8) & 0xFF) / 255.0f,
+                     (color & 0xFF) / 255.0f, ((color >> 24) & 0xFF) / 255.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // Restore scissor, colour mask and the current render target
+        glScissor(g_cached_scissor_box[0], g_cached_scissor_box[1], g_cached_scissor_box[2], g_cached_scissor_box[3]);
+        if (g_cached_scissor_test) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+        DWORD cw = m_render_states[D3DRS_COLORWRITEENABLE];
+        glColorMask((cw & D3DCOLORWRITEENABLE_RED) ? GL_TRUE : GL_FALSE, (cw & D3DCOLORWRITEENABLE_GREEN) ? GL_TRUE : GL_FALSE,
+                    (cw & D3DCOLORWRITEENABLE_BLUE) ? GL_TRUE : GL_FALSE, (cw & D3DCOLORWRITEENABLE_ALPHA) ? GL_TRUE : GL_FALSE);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_fbo_rendering ? g_fbo : 0);
+        return D3D_OK;
+    }
+
     virtual HRESULT SetRenderTarget(DWORD Index, IDirect3DSurface9* pRenderTarget) override {
         if (Index != 0 || !pRenderTarget) return D3DERR_INVALIDCALL;
 
         D3D9Surface* surf = static_cast<D3D9Surface*>(pRenderTarget);
+        // Like D3D9, the device keeps a reference: callers may Release the
+        // surface (e.g. one from GetSurfaceLevel) right after setting it.
+        surf->AddRef();
+        if (m_current_rt) m_current_rt->Release();
         m_current_rt = surf;
 
         if (surf->m_is_backbuffer) {
@@ -1351,6 +1455,8 @@ public:
         } else {
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, surf->m_gl_object, 0);
+            // the depth surface may have been set while the backbuffer was current
+            AttachDepthToFbo();
             m_fbo_rendering = true;
         }
         // Note: glFrontFace is set per draw call based on det(world*view) and Y-flip state,
@@ -1379,15 +1485,14 @@ public:
     
     virtual HRESULT SetDepthStencilSurface(IDirect3DSurface9* pZStencilSurface) override {
         // If backbuffer is active, we assume default DS. If FBO is active, we attach DS.
-        m_current_ds = static_cast<D3D9Surface*>(pZStencilSurface);
+        D3D9Surface* ds = static_cast<D3D9Surface*>(pZStencilSurface);
+        if (ds) ds->AddRef(); // held by the device, as in D3D9
+        if (m_current_ds) m_current_ds->Release();
+        m_current_ds = ds;
         
         if (!m_current_rt->m_is_backbuffer) {
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
-            if (m_current_ds) {
-                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_current_ds->m_gl_object);
-            } else {
-                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
-            }
+            AttachDepthToFbo();
         }
         return D3D_OK;
     }
@@ -1608,6 +1713,7 @@ public:
         else if (PrimitiveType == D3DPT_TRIANGLESTRIP) { type = GL_TRIANGLE_STRIP; vcount = PrimitiveCount + 2; }
         else if (PrimitiveType == D3DPT_TRIANGLEFAN) { type = GL_TRIANGLE_FAN; vcount = PrimitiveCount + 2; }
 
+        GuardFeedbackLoop();
         glDrawArrays(type, StartVertex, vcount);
 
         return D3D_OK;
@@ -1628,13 +1734,13 @@ public:
         D3D9Surface* dst = static_cast<D3D9Surface*>(pDestSurface);
 
         // Bind source to read framebuffer
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, src->m_is_backbuffer ? 0 : g_fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src->m_is_backbuffer ? 0 : g_fbo_read);
         if (!src->m_is_backbuffer) {
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src->m_gl_object, 0);
         }
 
         // Bind dest to draw framebuffer
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst->m_is_backbuffer ? 0 : g_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst->m_is_backbuffer ? 0 : g_fbo_aux);
         if (!dst->m_is_backbuffer) {
             glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst->m_gl_object, 0);
         }
@@ -1663,12 +1769,7 @@ public:
         }
 
         // Restore original RT binding
-        if (m_current_rt->m_is_backbuffer) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        } else {
-            glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_current_rt->m_gl_object, 0);
-        }
+        glBindFramebuffer(GL_FRAMEBUFFER, m_fbo_rendering ? g_fbo : 0);
         
         return D3D_OK;
     }
@@ -2102,6 +2203,7 @@ static void ApplySamplerStates(DWORD Sampler) {
             case D3DPT_POINTLIST: gl_primitive_type = GL_POINTS; break;
         }
 
+        GuardFeedbackLoop();
         CHECK_GL_ERROR(glDrawArrays(gl_primitive_type, 0, vertex_count));
 
         // Cleanup pointers (unbind RB to be safe?)
@@ -2428,6 +2530,7 @@ static void ApplySamplerStates(DWORD Sampler) {
 
         GLenum gl_index_type = (IndexDataFormat == D3DFMT_INDEX16) ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
 
+        GuardFeedbackLoop();
         CHECK_GL_ERROR(glDrawElements(gl_primitive_type, index_count, gl_index_type, 0));
 
         CHECK_GL_ERROR(glBindBuffer(GL_ARRAY_BUFFER, 0));
@@ -2672,8 +2775,8 @@ static void ApplySamplerStates(DWORD Sampler) {
         
         if (!m_current_rt) return D3D_OK;
 
-        // WebGL Y is bottom-to-top: flip Y origin
-        int gl_y = m_current_rt->m_height - pRect->bottom;
+        // WebGL Y is bottom-to-top: flip Y origin (not in upside-down render targets)
+        int gl_y = m_fbo_rendering ? (int)pRect->top : (int)(m_current_rt->m_height - pRect->bottom);
         int gl_w = pRect->right - pRect->left;
         int gl_h = pRect->bottom - pRect->top;
         glScissor(pRect->left, gl_y, gl_w, gl_h);
@@ -2811,8 +2914,9 @@ static void ApplySamplerStates(DWORD Sampler) {
 
         if (!m_current_rt) return D3D_OK;
 
-        // WebGL Y is bottom-to-top: flip Y origin
-        int gl_y = m_current_rt->m_height - (pViewport->Y + pViewport->Height);
+        // WebGL Y is bottom-to-top: flip Y origin (render targets are stored
+        // upside down already, so there D3D's Y is GL's)
+        int gl_y = m_fbo_rendering ? (int)pViewport->Y : (int)(m_current_rt->m_height - (pViewport->Y + pViewport->Height));
         glViewport(pViewport->X, gl_y, pViewport->Width, pViewport->Height);
         g_cached_viewport[0] = pViewport->X;
         g_cached_viewport[1] = gl_y;
@@ -3152,6 +3256,7 @@ static void ApplySamplerStates(DWORD Sampler) {
         size_t index_stride = is_index32 ? 4 : 2;
         void* indices = (void*)(uintptr_t)(startIndex * index_stride);
 
+        GuardFeedbackLoop();
         glDrawElements(gl_primitive_type, index_count, gl_index_type, indices);
 
         glDisableVertexAttribArray(g_position_location);

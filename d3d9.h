@@ -693,6 +693,13 @@ struct D3DMATERIAL9 {
 
 // Forward declaration
 struct IDirect3DSurface9;
+enum _D3DBACKBUFFER_TYPE {
+    D3DBACKBUFFER_TYPE_MONO = 0,
+    D3DBACKBUFFER_TYPE_LEFT = 1,
+    D3DBACKBUFFER_TYPE_RIGHT = 2
+};
+typedef enum _D3DBACKBUFFER_TYPE D3DBACKBUFFER_TYPE;
+
 class IDirect3DDevice9; // Forward declaration matches definition (class)
 
 // Base Interface
@@ -902,6 +909,8 @@ public:
     virtual HRESULT GetTransform(D3DTRANSFORMSTATETYPE State, D3DMATRIX* pMatrix) = 0;
     virtual HRESULT SetScissorRect(const RECT* pRect) = 0;
     virtual HRESULT GetRenderTarget(DWORD Index, IDirect3DSurface9** ppRenderTarget) = 0;
+    virtual HRESULT GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) = 0;
+    virtual HRESULT ColorFill(IDirect3DSurface9* pSurface, const RECT* pRect, D3DCOLOR color) = 0;
     virtual HRESULT SetRenderTarget(DWORD Index, IDirect3DSurface9* pRenderTarget) = 0;
     virtual HRESULT CreateOffscreenPlainSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9** ppSurface, void* pSharedHandle) = 0;
     virtual HRESULT GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface) = 0;
