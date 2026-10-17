@@ -120,12 +120,13 @@ void GenerateSphere(float radius, int slices, int stacks) {
 
 void GenerateFloor(float size, float y) {
     // Normal pointing up, CW winding for D3D9
+    // (clockwise as seen from above, so D3D9's default culling keeps it)
     g_floor[0] = { -size, y, -size, 0, 1, 0 };
-    g_floor[1] = {  size, y, -size, 0, 1, 0 };
-    g_floor[2] = {  size, y,  size, 0, 1, 0 };
+    g_floor[1] = {  size, y,  size, 0, 1, 0 };
+    g_floor[2] = {  size, y, -size, 0, 1, 0 };
     g_floor[3] = { -size, y, -size, 0, 1, 0 };
-    g_floor[4] = {  size, y,  size, 0, 1, 0 };
-    g_floor[5] = { -size, y,  size, 0, 1, 0 };
+    g_floor[4] = { -size, y,  size, 0, 1, 0 };
+    g_floor[5] = {  size, y,  size, 0, 1, 0 };
 }
 
 // Draw a small colored cube at (px,py,pz) using DrawPrimitiveUP

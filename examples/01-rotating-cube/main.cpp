@@ -226,6 +226,9 @@ int main() {
     }
     
     // Enable Alpha Blending
+    // The vertices carry their own colours: no lighting (D3D9 lights by default,
+    // and with no normals that would leave the cube black)
+    g_device->SetRenderState(D3DRS_LIGHTING, FALSE);
     g_device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
     g_device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
     g_device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);

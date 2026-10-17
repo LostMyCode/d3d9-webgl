@@ -1254,9 +1254,14 @@ public:
                 g_texture_stage_states[i][D3DTSS_ALPHAOP] = D3DTOP_DISABLE;
             }
             g_texture_stage_states[i][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
-            g_texture_stage_states[i][D3DTSS_COLORARG2] = D3DTA_DIFFUSE;
+            g_texture_stage_states[i][D3DTSS_COLORARG2] = D3DTA_CURRENT;
             g_texture_stage_states[i][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
-            g_texture_stage_states[i][D3DTSS_ALPHAARG2] = D3DTA_DIFFUSE;
+            g_texture_stage_states[i][D3DTSS_ALPHAARG2] = D3DTA_CURRENT;
+            g_texture_stage_states[i][D3DTSS_COLORARG0] = D3DTA_CURRENT;
+            g_texture_stage_states[i][D3DTSS_ALPHAARG0] = D3DTA_CURRENT;
+            g_texture_stage_states[i][D3DTSS_RESULTARG] = D3DTA_CURRENT;
+            g_texture_stage_states[i][D3DTSS_TEXCOORDINDEX] = i;
+            g_texture_stage_states[i][D3DTSS_TEXTURETRANSFORMFLAGS] = D3DTTFF_DISABLE;
         }
 
         // Initialize state
@@ -1271,6 +1276,28 @@ public:
         m_render_states[D3DRS_ZWRITEENABLE]     = TRUE;             // D3D9 default: depth write enabled
         m_render_states[D3DRS_COLORWRITEENABLE] = 0x0000000F;       // D3D9 default: all channels (R|G|B|A)
         m_render_states[D3DRS_ZFUNC]            = D3DCMP_LESSEQUAL; // D3D9 default: LESSEQUAL (not GL's LESS)
+        m_render_states[D3DRS_ZENABLE]          = TRUE;
+        m_render_states[D3DRS_SHADEMODE]        = D3DSHADE_GOURAUD;
+        m_render_states[D3DRS_CULLMODE]         = D3DCULL_CCW;
+        m_render_states[D3DRS_SRCBLEND]         = D3DBLEND_ONE;
+        m_render_states[D3DRS_DESTBLEND]        = D3DBLEND_ZERO;
+        m_render_states[D3DRS_BLENDOP]          = D3DBLENDOP_ADD;
+        m_render_states[D3DRS_ALPHAFUNC]        = D3DCMP_ALWAYS;
+        m_render_states[D3DRS_TEXTUREFACTOR]    = 0xFFFFFFFF;
+        m_render_states[D3DRS_COLORVERTEX]      = TRUE;
+        m_render_states[D3DRS_LOCALVIEWER]      = TRUE;
+        m_render_states[D3DRS_DIFFUSEMATERIALSOURCE]  = 1; // D3DMCS_COLOR1
+        m_render_states[D3DRS_SPECULARMATERIALSOURCE] = 2; // D3DMCS_COLOR2
+        m_render_states[D3DRS_CLIPPING]         = TRUE;
+        m_render_states[D3DRS_STENCILFUNC]      = D3DCMP_ALWAYS;
+        m_render_states[D3DRS_STENCILFAIL]      = D3DSTENCILOP_KEEP;
+        m_render_states[D3DRS_STENCILZFAIL]     = D3DSTENCILOP_KEEP;
+        m_render_states[D3DRS_STENCILPASS]      = D3DSTENCILOP_KEEP;
+        m_render_states[D3DRS_STENCILMASK]      = 0xFFFFFFFF;
+        m_render_states[D3DRS_STENCILWRITEMASK] = 0xFFFFFFFF;
+        float one = 1.0f;
+        memcpy(&m_render_states[D3DRS_FOGEND], &one, 4);
+        memcpy(&m_render_states[D3DRS_FOGDENSITY], &one, 4);
 
         // Initial viewport call
         SetViewport(&g_viewport);
@@ -1284,8 +1311,9 @@ public:
         // OpenGL uses CCW by default (right-handed), so we flip it
         glFrontFace(GL_CW);
 
-        // Disable culling initially (will be set via SetRenderState)
-        glDisable(GL_CULL_FACE);
+        // D3D9 default: cull counter-clockwise (back) faces
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
     }
     
     virtual ~D3D9Device() {
@@ -2622,11 +2650,29 @@ static void ApplySamplerStates(DWORD Sampler) {
                 if (Value) glEnable(GL_STENCIL_TEST);
                 else glDisable(GL_STENCIL_TEST);
                 break;
-            case D3DRS_STENCILFUNC: glStencilFunc(d3d_cmp_to_gl(Value), g_current_stencil_ref, 0xFFFFFFFF); break;
-            case D3DRS_STENCILREF: g_current_stencil_ref = Value; break;
-            case D3DRS_STENCILFAIL: glStencilOp(d3d_stencil_op_to_gl(Value), GL_KEEP, GL_KEEP); break;
-            case D3DRS_STENCILZFAIL: glStencilOp(GL_KEEP, d3d_stencil_op_to_gl(Value), GL_KEEP); break;
-            case D3DRS_STENCILPASS: glStencilOp(GL_KEEP, GL_KEEP, d3d_stencil_op_to_gl(Value)); break;
+            // the stencil test is set as a whole from the stored states
+            case D3DRS_STENCILFUNC: case D3DRS_STENCILREF: case D3DRS_STENCILMASK:
+                g_current_stencil_ref = m_render_states[D3DRS_STENCILREF];
+                glStencilFunc(d3d_cmp_to_gl(m_render_states[D3DRS_STENCILFUNC]), m_render_states[D3DRS_STENCILREF],
+                              m_render_states[D3DRS_STENCILMASK]);
+                break;
+            case D3DRS_STENCILFAIL: case D3DRS_STENCILZFAIL: case D3DRS_STENCILPASS:
+                glStencilOp(d3d_stencil_op_to_gl(m_render_states[D3DRS_STENCILFAIL]),
+                            d3d_stencil_op_to_gl(m_render_states[D3DRS_STENCILZFAIL]),
+                            d3d_stencil_op_to_gl(m_render_states[D3DRS_STENCILPASS]));
+                break;
+            case D3DRS_STENCILWRITEMASK: glStencilMask(Value); break;
+            case D3DRS_BLENDOP: {
+                GLenum eq = GL_FUNC_ADD;
+                switch (Value) {
+                    case 2: eq = GL_FUNC_SUBTRACT; break;          // D3DBLENDOP_SUBTRACT
+                    case 3: eq = GL_FUNC_REVERSE_SUBTRACT; break;  // D3DBLENDOP_REVSUBTRACT
+                    case 4: eq = GL_MIN; break;                    // D3DBLENDOP_MIN
+                    case 5: eq = GL_MAX; break;                    // D3DBLENDOP_MAX
+                }
+                glBlendEquation(eq);
+                break;
+            }
             
             case D3DRS_COLORWRITEENABLE:
                 glColorMask((Value & D3DCOLORWRITEENABLE_RED) ? GL_TRUE : GL_FALSE,
